@@ -26,13 +26,13 @@ No need to ask the user "should I translate?" or "where should I save?" — thes
 
 **Primary:** Freedium mirror
 ```
-web_fetch(url="https://freedium.cfd/https://medium.com/...", maxChars=100000)
+web_fetch(url="https://freedium-mirror.cfd/https://medium.com/...", maxChars=100000)
 ```
 
 **Fallback chain** (try in order):
 ```
-1. https://freedium.cfd/https://medium.com/...
-2. https://freedium-mirror.cfd/https://medium.com/...
+1. https://freedium-mirror.cfd/https://medium.com/...
+2. https://freedium.cfd/https://medium.com/...
 3. https://freedium-tnrt.onrender.com/https://medium.com/...
 4. https://webcache.googleusercontent.com/search?q=cache:https://medium.com/...
 ```
@@ -57,6 +57,28 @@ text = data['tweet']['text']
 **For regular tweets** — same fxtwitter API, extract `tweet.text`.
 
 **Fallback:** `https://api.vxtwitter.com/{username}/status/{tweet_id}`
+
+### Image Extraction (X/Twitter)
+
+fxtwitter API returns media in `tweet.media.all` (array) for tweet-level images, and `tweet.article.content.media` (array) for article-level images. Each entry has:
+- `url`: direct image URL
+- `type`: mime type (e.g. `image/jpeg`, `image/png`)
+- `altText`: optional alt text
+- `width` / `height`: dimensions
+
+**Extraction pattern:**
+
+```python
+media = []
+# Tweet-level media
+if 'media' in tweet and 'all' in tweet['media']:
+    media.extend(tweet['media']['all'])
+# Article-level media
+if 'article' in tweet and 'content' in tweet['article'] and 'media' in tweet['article']['content']:
+    media.extend(tweet['article']['content']['media'])
+```
+
+For general web pages, extract `<img>` src URLs from HTML content.
 
 ### General Web Pages
 
@@ -90,6 +112,266 @@ If curl returns SSL errors, add `-k` flag:
 ```
 curl -sk "https://..."
 ```
+
+---
+
+---
+
+## YouTube Videos
+
+### Detection
+
+YouTube URLs match:
+- `youtu.be/<id>` (short link)
+- `youtube.com/watch?v=<id>` (full link)
+- `youtube.com/embed/<id>` (embed link)
+- `m.youtube.com/watch?v=<id>` (mobile link)
+
+### Pipeline Overview
+
+```
+YouTube URL
+  → Check available captions (yt-dlp --list-subs)
+  → Download auto-generated captions (yt-dlp --write-auto-subs)
+  → Extract pure text (strip timestamps, deduplicate)
+  → Analyze topics & organize into sections
+  → Create bilingual knowledge base document (EN+CN)
+  → Save to knowledges/<category>/ and push to GitHub
+```
+
+### Prerequisites
+
+| Tool | Path | Notes |
+|------|------|-------|
+| `yt-dlp` | `./yt-dlp` (2026.03.17) | YouTube download tool |
+| `ffmpeg` / `ffprobe` | `./ffmpeg` / `./ffprobe` (7.0.2 musl) | Audio processing |
+| Node.js | `/usr/local/bin/node` v24.14.0 | JS Runtime for yt-dlp EJS challenge |
+| Cookies | `/tmp/yt_cookies3.txt` | YouTube auth cookies (Netscape format) |
+
+> **Note:** All paths assume the workspace root (`/home/node/.openclaw/workspace/`).
+> Export PATH before use: `export PATH="/home/node/.openclaw/workspace:$PATH"`
+
+### Step-by-Step Flow
+
+#### 1. Check Available Subtitles
+
+```bash
+export PATH="/home/node/.openclaw/workspace:$PATH"
+
+./yt-dlp \
+  --js-runtimes node:/usr/local/bin/node \
+  --cookies /tmp/yt_cookies3.txt \
+  --list-subs \
+  "https://youtu.be/<VIDEO_ID>"
+```
+
+If English captions (`en`) are listed under "Available automatic captions":
+→ **Proceed with Step 2** (auto-captions are free, fast, and reliable for English)
+
+If **no captions** exist:
+→ Download audio and use Whisper API for transcription:
+  - Read the `openai-whisper-api` skill (`/app/skills/openai-whisper-api/SKILL.md`)
+  - Note: Requires a real OpenAI API key; DeepSeek keys won't work (DeepSeek has no Whisper API)
+
+#### 2. Download Subtitles
+
+```bash
+export PATH="/home/node/.openclaw/workspace:$PATH"
+
+./yt-dlp \
+  --js-runtimes node:/usr/local/bin/node \
+  --cookies /tmp/yt_cookies3.txt \
+  --write-auto-subs \
+  --sub-langs en \
+  --skip-download \
+  --convert-subs srt \
+  -o "/home/node/.openclaw/workspace/downloads/%(id)s_subs" \
+  "https://youtu.be/<VIDEO_ID>"
+```
+
+Output SRT file: `downloads/<VIDEO_ID>_subs.en.srt`
+
+**Flags explained:**
+- `--write-auto-subs` — download YouTube's auto-generated captions
+- `--sub-langs en` — only English captions
+- `--skip-download` — don't download the video itself (only captions)
+- `--convert-subs srt` — convert to SRT format (most parseable)
+
+#### 3. Extract Pure Text from SRT
+
+SRT files have this structure:
+```
+1
+00:00:01,500 → 00:00:04,200
+Hello fellow Java developers.
+
+2
+00:00:04,300 → 00:00:07,800
+What if I told you that you could start building AI applications?
+```
+
+**Cleaning steps:**
+
+```bash
+# 1. Remove timestamp lines (contain →)
+sed -n '/^[0-9][0-9]:[0-9][0-9]:[0-9][0-9]/!p' <srt_file> | \
+  # 2. Remove segment number lines (bare numeric)
+  grep -v '^[0-9]*$' | \
+  # 3. Remove empty lines
+  sed '/^$/d' > /tmp/raw_text.txt
+```
+
+**Deduplication in Python:**
+
+Auto-captions often repeat consecutive lines. Clean with:
+
+```python
+def clean_subtitles(input_file, output_file):
+    with open(input_file) as f:
+        lines = [l.strip() for l in f if l.strip()]
+    
+    # Deduplicate consecutive near-identical lines
+    cleaned = []
+    for line in lines:
+        if cleaned and (line == cleaned[-1] or 
+                        line.replace('\r','') == cleaned[-1].replace('\r','')):
+            continue
+        cleaned.append(line)
+    
+    # Write cleaned text
+    with open(output_file, 'w') as f:
+        for line in cleaned:
+            f.write(line + '\n')
+    
+    print(f"Original: {len(lines)} lines")
+    print(f"Deduped:  {len(cleaned)} lines")
+    return cleaned
+```
+
+#### 4. Analyze Topics & Structure
+
+Scan the deduplicated text to identify major sections:
+
+```python
+def scan_topics(cleaned_lines, interval=2000):
+    """Sample text every N lines to identify chapter transitions."""
+    for i in range(0, len(cleaned_lines), interval):
+        chunk = cleaned_lines[i:i+3]
+        print(f"\n--- Lines {i+1} ---")
+        for c in chunk:
+            print(c[:200])
+```
+
+Also search for chapter-like keywords:
+```python
+keywords = ['section', 'chapter', 'part', 'project', 'demo', 
+            'now we', 'next', 'let\'s build', 'agenda',
+            'introduction to', 'rag', 'mcp', 'tool calling',
+            'agents', 'observability', 'evaluation', 'testing',
+            'structured output', 'getting started with',
+            'project 1', 'project 2', 'project 3']
+```
+
+For long videos (>2h), use keyword scanning to find chapter boundaries rather than reading the full text.
+
+#### 5. Create Knowledge Base Document
+
+Structure for each section:
+
+```markdown
+# [Video Title] — 精要
+
+> **视频**: [title](original-url)  
+> **主讲**: author | **时长**: duration  
+> **中文整理**: 根据字幕归纳核心内容
+
+---
+
+## 一、[Major Topic 1]
+
+### 1.1 [Subtopic]
+
+> "[Key English quote from speaker]"
+
+**中文解读：** [Chinese explanation with technical insight]
+
+```java
+// code example from the video, enhanced if needed
+```
+
+## 二、[Major Topic 2]
+
+...
+```
+
+**Guidelines:**
+- Each section: English key quote → Chinese translation + technical insight → code example → practical notes
+- Keep code original from the video (add missing imports/comments in Chinese)
+- For very long courses, include a "Chapter Overview" table at the top
+- Add a "总结" (Summary) section at the end with learning path recommendations
+
+#### 6. Save to Knowledge Base
+
+```
+knowledges/<category>/<video-slug>.md
+```
+
+Example categories:
+- `knowledges/spring/ai-agent/...` — Spring AI workshop/tutorial
+- `knowledges/ai-tools/...` — AI tooling/tutorials
+- `knowledges/database/...` — Database related
+
+Update the category README and push:
+
+```bash
+cd /home/node/.openclaw/workspace/knowledges
+GH_CONFIG_DIR=/home/node/.openclaw/gh-config git add <files>
+GH_CONFIG_DIR=/home/node/.openclaw/gh-config git commit -m "feat: add <video> notes"
+GH_CONFIG_DIR=/home/node/.openclaw/gh-config git push
+```
+
+> **Note:** `_organize.py` may time out for large repos. Use direct git commands as shown above.
+
+### Video Metadata Check
+
+```bash
+# Get title and duration in seconds
+export PATH="/home/node/.openclaw/workspace:$PATH"
+./yt-dlp \
+  --js-runtimes node:/usr/local/bin/node \
+  --cookies /tmp/yt_cookies3.txt \
+  --print title --print duration \
+  "https://youtu.be/<VIDEO_ID>"
+```
+
+### Word Count & Scope Estimation
+
+After text extraction, estimate how much content you're dealing with:
+- **< 30K words** (~1h video) → Full detail, paragraph-level
+- **30K-80K words** (~1-2h) → Section-level detail, paragraph-level for key parts
+- **80K-150K words** (~3-6h) → Chapter-level summary, code+concepts only
+- **> 150K words** (>6h) → High-level outline + links to timestamps
+
+### Cookie Renewal
+
+YouTube cookies expire. The user needs to re-export cookies from browser when:
+- `yt-dlp` returns "Sign in to confirm you're not a bot"
+- Captions download fails with 403 error
+- User gets redirected to consent page
+
+Cookie file location: `/tmp/yt_cookies3.txt` (Netscape format)
+
+### Cleanup
+
+After processing, remove temporary files to save tmpfs space (only 256MB available):
+```bash
+rm -f /home/node/.openclaw/workspace/downloads/<VIDEO_ID>*.srt
+rm -f /home/node/.openclaw/workspace/downloads/<VIDEO_ID>*.mp3
+rm -f /home/node/.openclaw/workspace/downloads/<VIDEO_ID>*.webm
+rm -f /tmp/raw_text.txt
+```
+
+Keep only the final knowledge base `.md` file and `downloads/<VIDEO_ID>.txt` (if kept for reference).
 
 ---
 
@@ -144,6 +426,139 @@ Translated and enhanced content...
 
 ---
 
+## 🖼️ Image Handling — Extract, Save, Reference
+
+### Image Storage
+
+Images from articles are saved to a unified directory:
+```
+knowledges/image/
+```
+
+This directory is excluded from `_organize.py` classification (images are not articles).
+
+### Naming Convention
+
+```
+{article-slug}-{n}.{ext}
+```
+
+Where `article-slug` is the markdown filename without `.md`, `n` is a 1-based index, and `ext` is the original extension (`jpg`, `png`, `gif`).
+
+### Step-by-Step Flow
+
+1. **Extract** image URLs from the fetched content
+2. **Download** via `curl -s -o <path> <url>`
+3. **Save** to `knowledges/image/`
+4. **Reference** in markdown with relative path: `![description](../image/filename.jpg)`
+
+### X/Twitter Image Extraction
+
+From fxtwitter JSON response, extract media URLs:
+
+```python
+import json, subprocess, os
+
+def extract_and_save_images(tweet_data, article_slug):
+    """
+    Extract image URLs from fxtwitter response and save them.
+    Returns list of (local_path, alt_text) tuples for markdown insertion.
+    """
+    images = []
+    tweet = tweet_data.get('tweet', {})
+    image_dir = '/home/node/.openclaw/workspace/knowledges/image'
+    os.makedirs(image_dir, exist_ok=True)
+    
+    # 1. Collect media from tweet-level (all media types)
+    if 'media' in tweet and 'all' in tweet['media']:
+        for m in tweet['media']['all']:
+            if m.get('type', '').startswith('image'):
+                images.append({
+                    'url': m['url'],
+                    'alt': m.get('altText', ''),
+                    'ext': m['url'].rsplit('.', 1)[-1].split('?')[0]
+                })
+    
+    # 2. Collect media from article-level content
+    if ('article' in tweet and 'content' in tweet['article'] 
+            and 'media' in tweet['article']['content']):
+        for m in tweet['article']['content']['media']:
+            if m.get('type', '').startswith('image'):
+                images.append({
+                    'url': m['url'],
+                    'alt': m.get('altText', ''),
+                    'ext': m['url'].rsplit('.', 1)[-1].split('?')[0]
+                })
+    
+    # 3. Deduplicate by URL
+    seen_urls = set()
+    unique_images = []
+    for img in images:
+        if img['url'] not in seen_urls:
+            seen_urls.add(img['url'])
+            unique_images.append(img)
+    
+    # 4. Download and save
+    saved = []
+    for i, img in enumerate(unique_images):
+        filename = f"{article_slug}-{i+1}.{img['ext']}"
+        local_path = os.path.join(image_dir, filename)
+        subprocess.run([
+            "curl", "-s", "-o", local_path,
+            img['url']
+        ], capture_output=True, timeout=15)
+        
+        if os.path.exists(local_path) and os.path.getsize(local_path) > 100:
+            saved.append({
+                'rel_path': f"../image/{filename}",
+                'alt': img['alt']
+            })
+            print(f"  🖼️  Saved: image/{filename}")
+        else:
+            print(f"  ⚠️  Failed to save: {img['url']}")
+    
+    return saved
+
+
+# Usage after fetching article:
+# saved_images = extract_and_save_images(data, "article-slug-here")
+# Then use saved_images in markdown: f"![alt]({img['rel_path']})"
+```
+
+### General Web Page Images
+
+For non-X articles (Medium, general web):
+1. Scan the fetched markdown content for image URLs
+2. Download relevant images (infographics, diagrams, screenshots — skip avatars, icons, ads)
+3. Save to `knowledges/image/`
+4. Replace absolute URLs in markdown with relative paths
+
+### Link Format in Markdown
+
+```markdown
+<!-- Article images use relative paths from their category subdirectory -->
+
+![Claude Code Routines architecture](../image/claude-code-routines-full-course-1.jpg)
+
+<!-- The ../image/ path works because articles are in subdirectories like:
+     ai-tools/claude/article.md → ../image/image.jpg → knowledges/image/image.jpg -->
+```
+
+### Push to GitHub
+
+When using `_organize.py push`, images in `knowledges/image/` are NOT auto-uploaded via the GitHub API (binary content). Use git directly for the initial seed:
+
+```bash
+cd /home/node/.openclaw/workspace/knowledges
+git add image/
+git commit -m "feat: add article images"
+git push
+```
+
+For subsequent pushes with `_organize.py`, images can be committed via the same git flow alongside the API-based push, or add a post-push script to the organize script to `git push` the images dir separately if the API approach is used.
+
+---
+
 ## GitHub Push
 
 After saving to `knowledges/`:
@@ -155,6 +570,20 @@ python3 _organize.py
 
 This auto-classifies, updates README, and pushes to GitHub. No manual git steps needed.
 
+### Push with Images
+
+Since `_organize.py` uses the GitHub Content API (no git client needed for markdown), images must be pushed via git when present:
+
+```bash
+cd /home/node/.openclaw/workspace/knowledges
+# Markdown files: use organize script API push
+python3 _organize.py push
+# Images: use git directly
+GH_CONFIG_DIR=/home/node/.openclaw/gh-config git add image/
+GH_CONFIG_DIR=/home/node/.openclaw/gh-config git commit -m "feat: add article images"
+GH_CONFIG_DIR=/home/node/.openclaw/gh-config git push
+```
+
 ---
 
 ## 📂 Directory Size Management
@@ -163,87 +592,41 @@ This auto-classifies, updates README, and pushes to GitHub. No manual git steps 
 
 When any knowledge base directory (including subdirectories) exceeds **20 files**, automatically trigger a re-classification/split into finer-grained subdirectories.
 
-### MECE 分类原则 (核心红线)
-
-拆分时必须遵循 **MECE (Mutually Exclusive, Collectively Exhaustive)**：
-
-| 原则 | 含义 | 反面教材 |
-|------|------|---------|
-| **Mutually Exclusive** | 子目录之间不重叠，一篇文章只能归属一个子目录 | ❌ `java/` 里有 Spring 文章，`spring/` 里也有 → 一篇文章两个位置 |
-| **Collectively Exhaustive** | 所有文章都有归属，没有遗漏 | ❌ `java/` 拆成 `jvm/` + `concurrency/`，但 `build-tools/` 的文章没地方放 |
-
-#### 判断文章归属的决策树
+### Current Subdirectory Structure (ai-tools example)
 
 ```
-文章应该放哪个子目录？
-├── 文章主要讲的是具体技术 X → 放 X 的子目录
-│   （如果 X 有多个子话题，往下拆分）
-└── 文章横跨多个技术 →
-    ├── 有主次关系？→ 放主要内容归属的子目录
-    └── 无主次关系？→ 放父级上层目录
+ai-tools/
+├── agent-engineering/   (agent architecture, patterns, survival guide)
+├── claude/              (Claude Code specific guides)
+├── frameworks/          (agent framework comparisons)
+└── ml-research/         (ML/RL papers)
 ```
 
-> **遇重叠则归主，无主次则归父。** 拆分时一篇文章只能出现在一个位置，严禁同一文件在多个子目录间
+### When to Split
 
-### 计算机语言/技术领域分类常识
+| Threshold | Action |
+|-----------|--------|
+| > 20 files in any dir | Analyze content themes → create subdirectories → move files → update `_organize.py` subdirectory profiles |
+| > 40 files in a subdir | Further split: e.g. `agent-engineering/` → `agent-engineering/patterns/` + `agent-engineering/practice/` |
 
-拆分时使用业内通用的命名约定，而非创造新词：
+### Implementation
 
-| 技术领域 | 标准子目录命名方案 | 说明 |
-|---------|-----------------|------|
-| **编程语言** | `languages/<lang>/` | 按语言分：`java/`, `python/`, `go/`, `typescript/`。子话题按：`jvm/`, `concurrency/`, `build-tools/`, `testing/` |
-| **框架** | `frameworks/<framework>/` | 框架名即目录名：`spring/`, `react/`, `langchain/`。Spring 子话题：`boot/`, `cloud/`, `security/`, `data/`, `testing/` |
-| **数据库** | `database/<type>/` | `relational/` (MySQL/PostgreSQL), `cache/` (Redis/Memcached), `nosql/` (MongoDB/Cassandra), `message-queue/` (Kafka/RabbitMQ) |
-| **AI/ML** | `ai/<subfield>/` | `agents/` (Agent 架构、框架), `ml/` (训练、模型), `llm/` (大模型、推理), `tools/` (Claude Code/Copilot/Cursor), `engineering/` (工程实践、Harness) |
-| **基础设施** | `infra/<layer>/` | `cloud/`, `container/`, `cicd/`, `monitoring/`, `network/`, `security/` |
-| **系统设计** | `system-design/<domain>/` | `distributed/`, `consensus/`, `consistency/`, `storage/`, `architecture-patterns/` |
-| **SRE/DevOps** | `sre/<practice>/` | `incident-response/`, `observability/`, `capacity/`, `reliability-patterns/` |
-
-#### 命名红线
-
-| ❌ 错误 | ✅ 正确 | 为什么 |
-|---------|---------|--------|
-| `java-programming/` | `java/` | 不要冗余后缀，行业就叫 java |
-| `java-spring-boot/` | `spring/boot/` | Spring Boot 是 Spring 的子话题，不是 Java 的 |
-| `aiframework/` | `ai/agents/` | 用完整通用名，不用缩写私货 |
-| `LangChain4j vs Spring AI/` | 放父目录 `ai/agents/` | 对比类文章横跨多主题，归上级最合适的目录 |
-| `Claude-DeepSeek/` | `ai/tools/` | 工具名随时间变，按功能归类 |
-
-### 拆分执行流程
-
-```
-目录超 20 篇
-  │
-  ▼
-1. 全面盘点目录内所有文章的主题分布
-2. 按 MECE 原则划分子目录边界（最多 5-8 个子目录）
-3. 确保子目录命名符合行业惯例（参考上表）
-4. 逐篇归类，交叉文章按决策树处理
-5. 移动文件到新子目录
-6. 更新 _organize.py 的 DOMAIN_PROFILES（添加子目录关键词映射）
-7. 运行 _organize.py 验证分类正确
-8. 检查 README.md 确认新结构
-```
-
-### Implementation (in _organize.py)
+During `_organize.py` execution, after classification:
 
 ```python
-# Threshold check after classification
-THRESHOLD = 20
+# Pseudo-logic
 for directory in classified_dirs:
     count = len(list((KNOWLEDGES_DIR / directory).rglob("*.md")))
-    if count > THRESHOLD:
-        print(f"  ⚠️  {directory}/ 达到 {count} 篇 (> {THRESHOLD}), 需启动 MECE 拆分！")
-        print(f"     当前子目录: {[d.name for d in (KNOWLEDGES_DIR/directory).iterdir() if d.is_dir()]}")
-        print(f"     建议: 按 {directory} 主题聚类 → 创建 MECE 子目录 → 逐篇归类")
+    if count > 20:
+        print(f"  ⚠️  {directory}/ 达到 {count} 篇，建议拆分")
+        # Trigger subdirectory audit or split routine
 ```
 
 ### When It Runs
 
 - After every `_organize.py` run (implicitly checked)
 - Also check explicitly when adding files manually
-- The threshold is **per-directory**, not total — `ai/agents/` 18 篇 + `spring/` 5 篇 = 各自独立计算
-- 告警意味着下一轮手动拆分，不是自动执行（需人工判断 MECE 边界）
+- The threshold is per-directory, not total — `agent-engineering/` 18 篇 + `spring/` 5 篇 = 各自独立计算
 
 ---
 
@@ -256,3 +639,4 @@ for directory in classified_dirs:
 | `x.com/.../status/...` | X/Twitter | fxtwitter API |
 | `twitter.com/.../status/...` | X/Twitter | fxtwitter API |
 | anything else | General | web_fetch |
+| `youtu.be/...` or `youtube.com/watch?v=...` | YouTube | yt-dlp + auto-captions + transcript |
