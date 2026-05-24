@@ -396,6 +396,37 @@ Apply automatically after fetching + translating:
 | Tutorial | Add prerequisite notes, common pitfalls |
 | News/announcement | Add context, significance analysis |
 | Long-form analysis | Structured summary with key takeaways |
+| Paper list / paper roundup | Extract each paper as a separate entry with: core contribution, key design, why it matters. Save to `knowledges/papers/` with per-paper section anchors. Add topic-level observation at end. |
+
+---
+
+### Paper List / Conference Roundup Processing
+
+When the X/Twitter or web content is a **list of papers** (e.g. DAIR.AI weekly top papers, conference highlights):
+
+1. **Extract each paper** — parse the article/text into individual paper entries with title and description
+2. **Search for paper links** — for each paper, search for its arxiv/paper URL (use `web_search` or `web_fetch` to find the paper on arxiv, openai.com, huggingface.co/papers, etc.)
+3. **Per-paper structure**: paper title & link, core contribution, key design/innovation details, why it matters
+4. **Save** to `knowledges/papers/<slug>.md`
+5. **Add topic-level observation** at end — identify the overarching themes of the week/event
+6. **Push**: `cd knowledges && git add papers/ && git commit && git push` (papers dir is NOT covered by `_organize.py`)
+7. **Create `knowledges/papers/README.md`** on first use if missing
+
+**Output format per paper**:
+```markdown
+## N. Paper Title
+
+- **链接：** [arXiv:XXXX.XXXXX](URL)
+- **类型：** 综述/原始研究/系统发布
+
+### Core Contribution
+
+...
+
+### Why It Matters
+
+...
+```
 
 ---
 
