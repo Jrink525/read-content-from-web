@@ -1,6 +1,6 @@
 ---
 name: read-content-from-web
-description: Read long-form content from paywalled or login-walled sites. Supports Medium articles (via freedium mirror), X/Twitter long-form articles (via fxtwitter API), and general web pages. When user shares any URL for reading/extraction/note-taking, handle everything automatically without asking for repeated instructions.
+description: Read long-form content from paywalled, login-walled, or Cloudflare-protected sites. Supports Medium (freedium mirror), X/Twitter long-form (fxtwitter API), Cloudflare-protected pages (Baeldung etc. via JinAI reader), WeChat articles (direct HTML extraction), and general web pages. When user shares any URL for reading/extraction/note-taking, handle everything automatically without asking for repeated instructions.
 ---
 
 # Read Content from Web
@@ -82,7 +82,88 @@ For general web pages, extract `<img>` src URLs from HTML content.
 
 ### General Web Pages
 
+先尝试 `web_fetch`。如果返回 403 且包含 `"Just a moment..."` 或 Cloudflare challenge，说明被 Cloudflare 拦截了，自动降级到 JinAI Reader。
+
 `web_fetch` with appropriate `maxChars` (default 100000 for articles, 15000 for quick lookups).
+
+---
+
+### Cloudflare-Protected Pages (Baeldung 等)
+
+**问题**：Baeldung、某些技术博客挂了 Cloudflare WAF（JS challenge），`web_fetch` 和 `curl` 都只能拿到 `"Just a moment..."` 页面。
+
+**解决方案：JinAI Reader API** (`r.jina.ai`)
+
+向 `r.jina.ai` 发 POST 请求（空 JSON body），它的渲染引擎能过 Cloudflare：
+
+```bash
+# 关键：不需要 API key！POST 空 JSON body 即可
+curl -sL --max-time 20 \
+  "https://r.jina.ai/https://www.baeldung.com/spring-boot-log-properties" \
+  -H "Content-Type: application/json" \
+  -d '{}'
+```
+
+返回格式（Markdown 文本）：
+```
+Title: ...
+URL Source: ...
+Published Time: ...
+
+Markdown Content:
+## 1. Overview
+...
+```
+
+**注意**：
+- 必须用 `POST`（JinAI 默认会要求 auth header，POST 空 body 能绕过 auth 检查）
+- 有些页面也会被 `r.jina.ai` 反爬（WeChat 文章就不行）
+- 响应有长度限制，长文章可能被截断
+
+---
+
+### WeChat 公众号文章
+
+**问题**：`mp.weixin.qq.com` 需要登录态 + JS 渲染，`web_fetch` / JinAI 都拿不到实际内容。
+
+**解决方案**：直接下载 HTML → Python 正则提取 `id="js_content"` div 内容 → strip HTML tags
+
+```python
+import re, html
+
+def extract_wechat_content(url):
+    """从 WeChat 文章 URL 提取纯文本内容"""
+    import subprocess
+    
+    # 1. 用 curl 下载完整 HTML（~750KB）
+    result = subprocess.run([
+        "curl", "-sL", "--max-time", "15",
+        "-H", "User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+        url
+    ], capture_output=True, text=True, timeout=20)
+    html_text = result.stdout
+    
+    # 2. 提取 id="js_content" 内部的 HTML
+    match = re.search(r'id="js_content"[^>]*>(.*?)</div>\s*<script', html_text, re.DOTALL)
+    if not match:
+        return None
+    
+    content_html = match.group(1)
+    
+    # 3. Strip HTML tags，保留纯文本
+    text = re.sub(r'<[^>]+>', ' ', content_html)
+    text = re.sub(r'&nbsp;', ' ', text)
+    text = re.sub(r'\s+', ' ', text).strip()
+    text = html.unescape(text)
+    
+    return text
+```
+
+**注意事项**：
+- HTML 很大（750KB+），需要足够的网络超时
+- 微信公众平台可能更新 HTML 结构，正则需要适配
+- 如果文章需要付费或关注，提取不到完整内容
+- 提取到的中文内容含有一些零宽空格，需要 `\u200b` 等去除
 
 ---
 
@@ -671,3 +752,5 @@ for directory in classified_dirs:
 | `twitter.com/.../status/...` | X/Twitter | fxtwitter API |
 | anything else | General | web_fetch |
 | `youtu.be/...` or `youtube.com/watch?v=...` | YouTube | yt-dlp + auto-captions + transcript |
+| `baeldung.com/...` | Cloudflare-protected | JinAI Reader (POST to `r.jina.ai`) |
+| `mp.weixin.qq.com/s/...` | WeChat 公众号 | Direct HTML → Python extract `js_content` |
