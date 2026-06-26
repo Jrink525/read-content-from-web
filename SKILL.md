@@ -155,39 +155,70 @@ Markdown Content:
 ```python
 import re, html
 
-def extract_wechat_content(url):
+def extract_wechat_content(url, use_referer_fallback=True):
     """从 WeChat 文章 URL 提取纯文本内容"""
     import subprocess
     
-    # 1. 用 curl 下载完整 HTML（~750KB）
-    result = subprocess.run([
-        "curl", "-sL", "--max-time", "15",
-        "-H", "User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
-        url
-    ], capture_output=True, text=True, timeout=20)
-    html_text = result.stdout
+    def _do_fetch(headers):
+        result = subprocess.run([
+            "curl", "-sL", "--max-time", "15"] + headers + [url
+        ], capture_output=True, text=True, timeout=20)
+        return result.stdout
     
-    # 2. 提取 id="js_content" 内部的 HTML
+    # 第一次尝试：标准请求头
+    html_text = _do_fetch([
+        "-H", "User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
+    ])
+    
+    # 检测是否被反爬拦截（环境异常验证页）
+    if "环境异常" in html_text or "Verify" in html_text or "验证" in html_text:
+        if use_referer_fallback:
+            # 第二次尝试：加上 Referer 头绕过反爬
+            html_text = _do_fetch([
+                "-H", "User-Agent: Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.6422.165 Mobile Safari/537.36 MicroMessenger/8.0.49",
+                "-H", "Referer: https://mp.weixin.qq.com/"
+            ])
+    
+    # 提取 id="js_content" 内部的 HTML
     match = re.search(r'id="js_content"[^>]*>(.*?)</div>\s*<script', html_text, re.DOTALL)
     if not match:
         return None
     
     content_html = match.group(1)
     
-    # 3. Strip HTML tags，保留纯文本
-    text = re.sub(r'<[^>]+>', ' ', content_html)
+    # Strip HTML tags，保留文本结构
+    text = re.sub(r'<br\s*/?>', '\n', content_html)
+    text = re.sub(r'</p>', '\n', text)
+    text = re.sub(r'</div>', '\n', text)
+    text = re.sub(r'<[^>]+>', ' ', text)
     text = re.sub(r'&nbsp;', ' ', text)
-    text = re.sub(r'\s+', ' ', text).strip()
-    text = html.unescape(text)
+    text = re.sub(r'\u200b', '', text)  # zero-width space
+    text = re.sub(r'[ \t]+', ' ', text)
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    text = html.unescape(text).strip()
     
     return text
 ```
 
+**反爬绕过技巧**：
+
+当标准请求被微信反爬拦截时（返回"环境异常"或验证页面），添加 `Referer: https://mp.weixin.qq.com/` 请求头即可绕过。推荐使用模拟微信浏览器 UA + Referer 头：
+
+```bash
+curl -sL --max-time 15 \
+  -H "User-Agent: Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.6422.165 Mobile Safari/537.36 MicroMessenger/8.0.49" \
+  -H "Referer: https://mp.weixin.qq.com/" \
+  "https://mp.weixin.qq.com/s/..." -o wechat.html
+```
+
+推荐始终同时使用微信浏览器 UA + Referer 头，两个条件组合能可靠绕过。
+
 **注意事项**：
-- HTML 很大（750KB+），需要足够的网络超时
+- HTML 很大（750KB+，带 Referer 后可达 3MB+），需要足够的网络超时
 - 微信公众平台可能更新 HTML 结构，正则需要适配
 - 如果文章需要付费或关注，提取不到完整内容
 - 提取到的中文内容含有一些零宽空格，需要 `\u200b` 等去除
+- 即使绕过反爬，extract 出来的文本仍可能包含广告/推广内容，需要后处理清理
 
 ### WeChat 文章图片
 
