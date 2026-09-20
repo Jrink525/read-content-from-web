@@ -15,6 +15,22 @@ When the user shares a URL and asks to read/extract/note/summarize it:
 4. **Enhance** — clarify, structure, add glosses, extract key points
 5. **Save to workspace root** as `<category>/<slug>.md` (e.g. `ai-tools/article.md`)
 6. **Commit & push** via git
+7. **Explain what / how / why** — 在推送完成后，自动给用户一个精简但完整的「what / how / why」归纳，结构化陈述文章：
+   - **What（是什么）** — 文章讲的核心内容/解决了什么问题/关键对象
+   - **How（怎么做的）** — 核心方案/方法步骤/关键代码或机制（用 1-2 个关键示例支撑）
+   - **Why（为什么/意义）** — 解决了什么痛点、适用场景、亮点或局限
+
+   参考格式（简明，可含少量代码）：
+   ```
+   ✅ 文章已整理并推送（commit `xxx`）
+   **文件：** <category>/<slug>.md
+   ---
+   **What（是什么）：** ...
+   **How（怎么做）：** ...
+   **Why（为什么/意义）：** ...
+   ```
+
+   这条 what/how/why 归纳是流程的最后一步，只对**用户可见的回复**生效，不写入知识库文件（文件内已含更完整的结构化笔记）。
 
 No need to ask the user "should I translate?" or "where should I save?" — these are the defaults.
 
@@ -68,15 +84,7 @@ web_fetch(url="https://freedium-mirror.cfd/https://medium.com/...", maxChars=100
 https://api.fxtwitter.com/{username}/status/{tweet_id}
 ```
 
-Content extraction (Python):
-```python
-import json, sys
-data = json.loads(sys.stdin.read())
-# Long-form article
-blocks = data['tweet']['article']['content']['blocks']
-# Regular tweet
-text = data['tweet']['text']
-```
+**Long-form articles: render each block with its `entityRanges` → `content.entityMap[key].value`; block `text` alone loses all links, code, embeds, and media.** `type` is `LINK` (`data.url`), `MARKDOWN` (code fence in `data.markdown`), `MEDIA`, or `TWEET` (`data.tweetId`); splice each range into the text at `offset`/`length`, and map `header-one/two/three` to `#/##/###`. Article images come from `article.media_entities[].media_info.original_img_url` — not `article.content.media`, which is usually empty, so reading only that path silently drops every diagram.
 
 **For regular tweets** — same fxtwitter API, extract `tweet.text`.
 
@@ -282,6 +290,7 @@ Apply automatically after fetching + translating:
 | News/announcement | Add context, significance analysis |
 | Long-form analysis | Structured summary with key takeaways |
 | Paper list / paper roundup | Extract each paper as a separate entry, save to `papers/` |
+| Single article → comprehensive guide | 1. 分析文章中的知识点，确保全面、MECE、有深度<br>2. 从 X / Medium / 技术博客搜索相关文章补全<br>3. 综合所有来源写一篇全面的上手文档<br>4. 确保文档：循序渐进、全面、MECE、有深度、有最佳实践 |
 
 ---
 
