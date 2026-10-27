@@ -12,7 +12,7 @@ When the user shares a URL and asks to read/extract/note/summarize it:
 1. **Auto-detect** the site type (Medium / X / other)
 2. **Fetch full content** using the best available method
 3. **Translate to Chinese** (if English original) with natural, idiomatic flow
-4. **Enhance** — clarify, structure, add glosses, extract key points
+4. **Enhance** — 先按下方「阅读与整理的纪律」列出该文的主张，再澄清、结构化、加注、抽要点
 5. **Save to workspace root** as `<category>/<slug>.md` (e.g. `ai-tools/article.md`)
 6. **Commit & push** via git
 7. **Explain what / how / why** — 在推送完成后，自动给用户一个精简但完整的「what / how / why」归纳，结构化陈述文章：
@@ -275,6 +275,28 @@ curl -sk "https://..."
 - Keep code blocks in original language (only translate comments)
 - For author voice/personality, preserve the tone
 - For technical concepts: accuracy over elegance
+
+---
+
+## 阅读与整理的纪律（来自知识库）
+
+这四条解决的是「读完了，整理出来却是复述目录」这个失败模式。依据：`ai-tools/career/learning-faster-principles.md`（提取优于识别、先连接再收集）、`ai-tools/career/writing-system-saved-my-brain.md`（写作是检验真懂的试金石）、`ai-tools/career/how-to-articulate-yourself-intelligently.md`（金字塔原理）。
+
+**1. 闭卷提取，再回原文核对。** 读完先合上原文，凭记忆写下该文的 3–5 条主张；写完才打开原文逐条核对。识别（眼熟）不等于提取（能重建），熟悉感会制造「我以为我懂」的错觉。核对时对不上的地方就是理解断点，回原文补读，不要改写措辞绕过去。
+
+- 完成判据：每条主张都能在原文找到逐字支撑，且顺序是原文的论证顺序，不是你回忆的顺序。
+
+**2. 每节结论先行。** 每节第一句写该节可判定的结论，后面才是证据、引用与代码。这是金字塔原理的 answer-first：主结论 → 3–5 个支撑 → 细节。
+
+- 完成判据：把每节的最后一段删掉，该节仍然成立；若节意崩塌，说明结论被放在了末尾，调回开头。
+
+**3. 先连接，再收集。** 保存前先找 2–3 篇已有知识库页面，为每篇写一句「它回答什么问题」，再写「本文回答什么问题」。收集不等于构建，知识只在连上已有认知时才有价值。文末加 `## 相关页面`，每条都写全「它答什么 / 本文答什么」两半，只有链接算没写完。
+
+**4. 写不出来就标未理解，不要用衔接词填空。** 卡住的地方是理解断点，不是文笔问题。标 `> 未理解：<具体哪一步说不清>`，并汇总进 `## 局限`。禁止用「可以看出」「这体现了」「不难发现」「众所周知」把空洞连起来；每出现一次，后面必须跟具体机制或数字。
+
+- 完成判据：`grep -nE '可以看出|这体现了|不难发现|众所周知' <page>.md` 的每一处后面都有实体内容。
+
+**5. 原文没说的不要补成事实。** 数字只写原文给的；没有就写「原文未给」。自己的推论标「推论」，不要与原文判断混排在同一段。原文配图只有图说、没有可下载地址时，写成一行 `> **原文图说**：…`，不要拼死链。
 
 ---
 
