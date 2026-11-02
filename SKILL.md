@@ -1,6 +1,6 @@
 ---
 name: read-content-from-web
-description: "Read, extract, translate, or file any URL or X post: Medium (freedium), X/Twitter long-form articles and threads, GitHub PR/issue, WeChat, Cloudflare-protected pages, or general web pages. Writes a sourced Chinese KB page (or a chat answer) with what/how-why digest, verified quotes, images, commit hash."
+description: "X post/Article, blog, GitHub PR, Medium, WeChat, Cloudflare URL: extract and translate, then answer in chat or file a sourced Chinese KB page with cited quotes and a commit."
 title: "Read Content from Web"
 tags:
   - skills
